@@ -8,7 +8,8 @@ import { VideoTaskObject, ClientObject, StaffObject, TaskStatus } from '../types
 import { 
   Plus, Edit, Trash2, Link, Calendar, User, 
   Layers, CheckCircle2, PlayCircle, Eye, AlertCircle, Copy, Check, Star,
-  Settings, ChevronDown, ChevronUp, ArrowUpDown, EyeOff, Trash, MoveLeft, MoveRight
+  Settings, ChevronDown, ChevronUp, ArrowUpDown, EyeOff, Trash, MoveLeft, MoveRight,
+  ListFilter, X
 } from 'lucide-react';
 
 interface ProjectMatrixProps {
@@ -114,6 +115,23 @@ export default function ProjectMatrix({
     localStorage.setItem('deep_focus_col_widths_v2', JSON.stringify(columnWidths));
   }, [columnWidths]);
 
+  // Notion-style filters state
+  const [statusFilter, setStatusFilter] = useState<'all' | 'done' | 'not-done' | 'custom'>('all');
+  const [selectedStatuses, setSelectedStatuses] = useState<TaskStatus[]>([]);
+  const [editorFilter, setEditorFilter] = useState<string>('all');
+  const [clientPaidFilter, setClientPaidFilter] = useState<string>('all'); // 'all' | 'Paid' | 'Unpaid' | 'Invoiced'
+  const [subPaidFilter, setSubPaidFilter] = useState<string>('all'); // 'all' | 'Paid' | 'Unpaid'
+  const [activeFilterDropdown, setActiveFilterDropdown] = useState<'status' | 'editor' | 'clientPaid' | 'subPaid' | null>(null);
+
+  // List of active columns to render in table header/body
+  const activeColumns = useMemo(() => columns.filter(c => c.visible), [columns]);
+
+  // Calculate total table width to make custom column resizing fluid and reliable
+  const totalTableWidth = useMemo(() => {
+    const colsWidth = activeColumns.reduce((sum, col) => sum + (columnWidths[col.id] || 120), 0);
+    return colsWidth + 40; // 40px for bulk checkbox column
+  }, [activeColumns, columnWidths]);
+
   const handleResizeStart = (colId: string, startEvent: React.MouseEvent) => {
     startEvent.preventDefault();
     startEvent.stopPropagation();
@@ -185,19 +203,42 @@ export default function ProjectMatrix({
     setColumns(prev => prev.map(c => c.id === colId ? { ...c, label: newLabel } : c));
   };
 
-  // Filtering based on search query and active tab
+  // Filtering based on search query, active tab, and Notion-style filters
   const filteredTasks = useMemo(() => {
     return tasks.filter(task => {
+      // 1. Client tab filter
       const matchesTab = activeTab === 'all' || 
                          task.clientId === activeTab ||
                          (activeTab === 'unassigned' && (!task.clientId || !clients.some(c => c.id === task.clientId)));
+      
+      // 2. Search query filter
       const matchesSearch = task.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
                             getEditorName(task.assignedEditorId).toLowerCase().includes(searchQuery.toLowerCase()) ||
                             getClientName(task.clientId).toLowerCase().includes(searchQuery.toLowerCase()) ||
                             task.id.toLowerCase().includes(searchQuery.toLowerCase());
-      return matchesTab && matchesSearch;
+
+      // 3. Status filter (Done: Approved, Not Done: Anything else, Custom: selected array)
+      let matchesStatus = true;
+      if (statusFilter === 'done') {
+        matchesStatus = task.status === 'Approved';
+      } else if (statusFilter === 'not-done') {
+        matchesStatus = task.status !== 'Approved';
+      } else if (statusFilter === 'custom') {
+        matchesStatus = selectedStatuses.includes(task.status);
+      }
+
+      // 4. Editor filter
+      const matchesEditor = editorFilter === 'all' || task.assignedEditorId === editorFilter;
+
+      // 5. Client Paid Status filter
+      const matchesClientPaid = clientPaidFilter === 'all' || task.clientPaidStatus === clientPaidFilter;
+
+      // 6. Sub Paid Status filter
+      const matchesSubPaid = subPaidFilter === 'all' || task.subPaidStatus === subPaidFilter;
+
+      return matchesTab && matchesSearch && matchesStatus && matchesEditor && matchesClientPaid && matchesSubPaid;
     });
-  }, [tasks, activeTab, searchQuery, staff, clients]);
+  }, [tasks, activeTab, searchQuery, staff, clients, statusFilter, selectedStatuses, editorFilter, clientPaidFilter, subPaidFilter]);
 
   // Sorting
   const sortedTasks = useMemo(() => {
@@ -371,8 +412,6 @@ export default function ProjectMatrix({
     setQuickTitle(prev => ({ ...prev, [clientId]: '' }));
   };
 
-  // List of active columns to render in table header/body
-  const activeColumns = useMemo(() => columns.filter(c => c.visible), [columns]);
 
   return (
     <div id="project-matrix-panel" className="space-y-6">
@@ -534,6 +573,302 @@ export default function ProjectMatrix({
         )}
       </div>
 
+      {/* NOTION-STYLE MULTI-FILTER BAR */}
+      <div className="flex flex-wrap items-center gap-2 p-2 bg-zinc-950/20 border border-zinc-900 rounded-none text-[11px] font-mono select-none">
+        <div className="flex items-center gap-1.5 text-zinc-500 mr-1 shrink-0">
+          <ListFilter className="w-3.5 h-3.5" />
+          <span className="uppercase text-[9px] tracking-wider font-bold">Bộ Lọc:</span>
+        </div>
+
+        {/* 1. STATUS FILTER PILL */}
+        <div className="relative">
+          <button
+            onClick={() => setActiveFilterDropdown(activeFilterDropdown === 'status' ? null : 'status')}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-sm border transition-all text-[10px] uppercase font-bold cursor-pointer ${
+              statusFilter !== 'all'
+                ? 'bg-[#F97316]/10 border-[#F97316]/40 text-[#F97316]'
+                : 'bg-zinc-900/40 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+            }`}
+          >
+            <span>Trạng thái: </span>
+            <span className="text-white">
+              {statusFilter === 'all' && 'Tất cả'}
+              {statusFilter === 'done' && 'Đã xong (Approved) ✓'}
+              {statusFilter === 'not-done' && 'Chưa xong (In Progress) ⏳'}
+              {statusFilter === 'custom' && `Tùy chọn (${selectedStatuses.length})`}
+            </span>
+            <ChevronDown className="w-3 h-3 text-zinc-500" />
+          </button>
+
+          {activeFilterDropdown === 'status' && (
+            <>
+              <div className="fixed inset-0 z-30" onClick={() => setActiveFilterDropdown(null)} />
+              <div className="absolute left-0 mt-1 w-64 bg-zinc-950 border border-zinc-800 rounded-sm shadow-2xl z-40 p-2 space-y-1 animate-fade-in">
+                <div className="px-2 py-1 text-[9px] text-zinc-500 font-bold uppercase border-b border-zinc-900 mb-1">
+                  Chọn bộ lọc trạng thái
+                </div>
+                {[
+                  { value: 'all', label: 'Tất cả trạng thái (Show All)' },
+                  { value: 'not-done', label: 'Chưa xong (In Progress / Active)' },
+                  { value: 'done', label: 'Đã xong (Approved / Done)' },
+                  { value: 'custom', label: 'Chọn thủ công (Custom Selection...)' }
+                ].map(opt => (
+                  <button
+                    key={opt.value}
+                    onClick={() => {
+                      setStatusFilter(opt.value as any);
+                      if (opt.value === 'custom' && selectedStatuses.length === 0) {
+                        setSelectedStatuses(['Unassigned', 'Rough Cut', 'Final Polish', 'Client Review']);
+                      }
+                      if (opt.value !== 'custom') {
+                        setActiveFilterDropdown(null);
+                      }
+                    }}
+                    className={`w-full text-left px-2 py-1.5 hover:bg-zinc-900 rounded-sm flex items-center justify-between cursor-pointer transition-colors ${
+                      statusFilter === opt.value ? 'text-[#F97316] font-bold' : 'text-zinc-400'
+                    }`}
+                  >
+                    <span>{opt.label}</span>
+                    {statusFilter === opt.value && <Check className="w-3 h-3 text-[#F97316]" />}
+                  </button>
+                ))}
+
+                {statusFilter === 'custom' && (
+                  <div className="pt-1.5 border-t border-zinc-900 mt-1 space-y-1 pl-1">
+                    {['Unassigned', 'Rough Cut', 'Final Polish', 'Client Review', 'Approved'].map(st => {
+                      const isChecked = selectedStatuses.includes(st as TaskStatus);
+                      return (
+                        <label
+                          key={st}
+                          className="flex items-center gap-2 px-2 py-1 text-[10px] text-zinc-400 hover:text-white cursor-pointer select-none"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedStatuses(prev => [...prev, st as TaskStatus]);
+                              } else {
+                                setSelectedStatuses(prev => prev.filter(item => item !== st));
+                              }
+                            }}
+                            className="accent-[#F97316] cursor-pointer"
+                          />
+                          <span>{st}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* 2. EDITOR FILTER PILL */}
+        <div className="relative">
+          <button
+            onClick={() => setActiveFilterDropdown(activeFilterDropdown === 'editor' ? null : 'editor')}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-sm border transition-all text-[10px] uppercase font-bold cursor-pointer ${
+              editorFilter !== 'all'
+                ? 'bg-[#F97316]/10 border-[#F97316]/40 text-[#F97316]'
+                : 'bg-zinc-900/40 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+            }`}
+          >
+            <span>Người dựng: </span>
+            <span className="text-white">
+              {editorFilter === 'all' && 'Tất cả'}
+              {editorFilter === 'Unassigned' && 'Claimable Pool (Chưa nhận)'}
+              {editorFilter === 'Phuc' && 'Phuc (Lead)'}
+              {editorFilter !== 'all' && editorFilter !== 'Unassigned' && editorFilter !== 'Phuc' && (staff.find(s => s.id === editorFilter)?.name || editorFilter)}
+            </span>
+            <ChevronDown className="w-3 h-3 text-zinc-500" />
+          </button>
+
+          {activeFilterDropdown === 'editor' && (
+            <>
+              <div className="fixed inset-0 z-30" onClick={() => setActiveFilterDropdown(null)} />
+              <div className="absolute left-0 mt-1 w-64 bg-zinc-950 border border-zinc-800 rounded-sm shadow-2xl z-40 p-2 space-y-1 max-h-72 overflow-y-auto animate-fade-in">
+                <div className="px-2 py-1 text-[9px] text-zinc-500 font-bold uppercase border-b border-zinc-900 mb-1">
+                  Lọc theo Người Dựng (Editor)
+                </div>
+                <button
+                  onClick={() => {
+                    setEditorFilter('all');
+                    setActiveFilterDropdown(null);
+                  }}
+                  className={`w-full text-left px-2 py-1.5 hover:bg-zinc-900 rounded-sm flex items-center justify-between cursor-pointer transition-colors ${
+                    editorFilter === 'all' ? 'text-[#F97316] font-bold' : 'text-zinc-400'
+                  }`}
+                >
+                  <span>Tất cả người dựng (Show All)</span>
+                  {editorFilter === 'all' && <Check className="w-3 h-3 text-[#F97316]" />}
+                </button>
+                <button
+                  onClick={() => {
+                    setEditorFilter('Unassigned');
+                    setActiveFilterDropdown(null);
+                  }}
+                  className={`w-full text-left px-2 py-1.5 hover:bg-zinc-900 rounded-sm flex items-center justify-between cursor-pointer transition-colors ${
+                    editorFilter === 'Unassigned' ? 'text-[#F97316] font-bold' : 'text-zinc-400'
+                  }`}
+                >
+                  <span>Claimable Pool (Chưa ai nhận)</span>
+                  {editorFilter === 'Unassigned' && <Check className="w-3 h-3 text-[#F97316]" />}
+                </button>
+                <button
+                  onClick={() => {
+                    setEditorFilter('Phuc');
+                    setActiveFilterDropdown(null);
+                  }}
+                  className={`w-full text-left px-2 py-1.5 hover:bg-zinc-900 rounded-sm flex items-center justify-between cursor-pointer transition-colors ${
+                    editorFilter === 'Phuc' ? 'text-[#F97316] font-bold' : 'text-zinc-400'
+                  }`}
+                >
+                  <span>Phuc (Lead)</span>
+                  {editorFilter === 'Phuc' && <Check className="w-3 h-3 text-[#F97316]" />}
+                </button>
+                {staff.map(s => (
+                  <button
+                    key={s.id}
+                    onClick={() => {
+                      setEditorFilter(s.id);
+                      setActiveFilterDropdown(null);
+                    }}
+                    className={`w-full text-left px-2 py-1.5 hover:bg-zinc-900 rounded-sm flex items-center justify-between cursor-pointer transition-colors ${
+                      editorFilter === s.id ? 'text-[#F97316] font-bold' : 'text-zinc-400'
+                    }`}
+                  >
+                    <span>{s.name}</span>
+                    {editorFilter === s.id && <Check className="w-3 h-3 text-[#F97316]" />}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* 3. CLIENT PAID FILTER PILL */}
+        <div className="relative">
+          <button
+            onClick={() => setActiveFilterDropdown(activeFilterDropdown === 'clientPaid' ? null : 'clientPaid')}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-sm border transition-all text-[10px] uppercase font-bold cursor-pointer ${
+              clientPaidFilter !== 'all'
+                ? 'bg-[#F97316]/10 border-[#F97316]/40 text-[#F97316]'
+                : 'bg-zinc-900/40 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+            }`}
+          >
+            <span>Thanh toán khách: </span>
+            <span className="text-white">
+              {clientPaidFilter === 'all' && 'Tất cả'}
+              {clientPaidFilter === 'Paid' && 'Đã trả (Paid)'}
+              {clientPaidFilter === 'Unpaid' && 'Chưa trả (Unpaid)'}
+              {clientPaidFilter === 'Invoiced' && 'Đã xuất hóa đơn (Invoiced)'}
+            </span>
+            <ChevronDown className="w-3 h-3 text-zinc-500" />
+          </button>
+
+          {activeFilterDropdown === 'clientPaid' && (
+            <>
+              <div className="fixed inset-0 z-30" onClick={() => setActiveFilterDropdown(null)} />
+              <div className="absolute left-0 mt-1 w-64 bg-zinc-950 border border-zinc-800 rounded-sm shadow-2xl z-40 p-2 space-y-1 animate-fade-in">
+                <div className="px-2 py-1 text-[9px] text-zinc-500 font-bold uppercase border-b border-zinc-900 mb-1">
+                  Lọc Trạng thái Khách Thanh Toán
+                </div>
+                {[
+                  { value: 'all', label: 'Tất cả thanh toán (Show All)' },
+                  { value: 'Unpaid', label: 'Chưa thanh toán (Unpaid)' },
+                  { value: 'Invoiced', label: 'Đã gửi hóa đơn (Invoiced)' },
+                  { value: 'Paid', label: 'Đã thanh toán (Paid)' }
+                ].map(opt => (
+                  <button
+                    key={opt.value}
+                    onClick={() => {
+                      setClientPaidFilter(opt.value);
+                      setActiveFilterDropdown(null);
+                    }}
+                    className={`w-full text-left px-2 py-1.5 hover:bg-zinc-900 rounded-sm flex items-center justify-between cursor-pointer transition-colors ${
+                      clientPaidFilter === opt.value ? 'text-[#F97316] font-bold' : 'text-zinc-400'
+                    }`}
+                  >
+                    <span>{opt.label}</span>
+                    {clientPaidFilter === opt.value && <Check className="w-3 h-3 text-[#F97316]" />}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* 4. SUB PAID FILTER PILL */}
+        <div className="relative">
+          <button
+            onClick={() => setActiveFilterDropdown(activeFilterDropdown === 'subPaid' ? null : 'subPaid')}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-sm border transition-all text-[10px] uppercase font-bold cursor-pointer ${
+              subPaidFilter !== 'all'
+                ? 'bg-[#F97316]/10 border-[#F97316]/40 text-[#F97316]'
+                : 'bg-zinc-900/40 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+            }`}
+          >
+            <span>Thanh toán Editor: </span>
+            <span className="text-white">
+              {subPaidFilter === 'all' && 'Tất cả'}
+              {subPaidFilter === 'Paid' && 'Đã trả (Paid)'}
+              {subPaidFilter === 'Unpaid' && 'Chưa trả (Unpaid)'}
+            </span>
+            <ChevronDown className="w-3 h-3 text-zinc-500" />
+          </button>
+
+          {activeFilterDropdown === 'subPaid' && (
+            <>
+              <div className="fixed inset-0 z-30" onClick={() => setActiveFilterDropdown(null)} />
+              <div className="absolute left-0 mt-1 w-64 bg-zinc-950 border border-zinc-800 rounded-sm shadow-2xl z-40 p-2 space-y-1 animate-fade-in">
+                <div className="px-2 py-1 text-[9px] text-zinc-500 font-bold uppercase border-b border-zinc-900 mb-1">
+                  Lọc Trạng thái Editor Thanh Toán
+                </div>
+                {[
+                  { value: 'all', label: 'Tất cả (Show All)' },
+                  { value: 'Unpaid', label: 'Chưa thanh toán (Unpaid)' },
+                  { value: 'Paid', label: 'Đã thanh toán (Paid)' }
+                ].map(opt => (
+                  <button
+                    key={opt.value}
+                    onClick={() => {
+                      setSubPaidFilter(opt.value);
+                      setActiveFilterDropdown(null);
+                    }}
+                    className={`w-full text-left px-2 py-1.5 hover:bg-zinc-900 rounded-sm flex items-center justify-between cursor-pointer transition-colors ${
+                      subPaidFilter === opt.value ? 'text-[#F97316] font-bold' : 'text-zinc-400'
+                    }`}
+                  >
+                    <span>{opt.label}</span>
+                    {subPaidFilter === opt.value && <Check className="w-3 h-3 text-[#F97316]" />}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* 5. CLEAR FILTERS BUTTON */}
+        {(statusFilter !== 'all' || editorFilter !== 'all' || clientPaidFilter !== 'all' || subPaidFilter !== 'all') && (
+          <button
+            onClick={() => {
+              setStatusFilter('all');
+              setSelectedStatuses([]);
+              setEditorFilter('all');
+              setClientPaidFilter('all');
+              setSubPaidFilter('all');
+              setActiveFilterDropdown(null);
+            }}
+            className="flex items-center gap-1 px-2.5 py-1 rounded-sm border border-[#ef4444]/30 hover:border-[#ef4444] bg-[#ef4444]/5 hover:bg-[#ef4444]/20 text-[#ef4444] text-[10px] uppercase font-bold cursor-pointer transition-all ml-auto shrink-0"
+          >
+            <X className="w-3 h-3" />
+            <span>Xóa bộ lọc (Reset)</span>
+          </button>
+        )}
+      </div>
+
       {/* Bulk Action Controls */}
       {selectedTaskIds.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-[#ef4444]/10 border border-[#ef4444]/30 rounded-sm text-xs font-mono text-[#f4f4f5] animate-fade-in">
@@ -654,7 +989,7 @@ export default function ProjectMatrix({
 
                   {/* Desktop Spreadsheet Scroll Panel */}
                   <div className="overflow-x-auto select-text">
-                    <table className="w-full text-left border-collapse min-w-[900px]">
+                    <table className="table-fixed text-left border-collapse" style={{ width: totalTableWidth, minWidth: totalTableWidth }}>
                       <thead>
                         <tr className="text-[9px] font-mono text-zinc-500 uppercase border-b border-zinc-900 tracking-wider select-none">
                           <th className="py-2.5 px-3 text-center w-8 min-w-8 max-w-8">
