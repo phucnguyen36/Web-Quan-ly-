@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import { X, Check, Eye, EyeOff, Volume2, VolumeX, Shield, User, Sliders, Image as ImageIcon } from 'lucide-react';
+import { X, Check, Eye, EyeOff, Volume2, VolumeX, Shield, User, Sliders, Image as ImageIcon, Upload } from 'lucide-react';
 
 export interface UserProfile {
   name: string;
@@ -132,6 +132,22 @@ export default function ProfileSettingsModal({ profile, onSave, onClose }: Profi
     }
   };
 
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const base64 = evt.target?.result as string;
+      if (base64) {
+        setAvatarUrl(base64);
+        setCustomAvatarInput(base64);
+        if (soundEnabled) playSynthChime('toggle');
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -256,6 +272,22 @@ export default function ProfileSettingsModal({ profile, onSave, onClose }: Profi
                       className="bg-transparent text-xs text-zinc-300 focus:outline-none w-full font-mono"
                     />
                   </div>
+                </div>
+
+                <div className="pt-2">
+                  <label className="flex items-center justify-center gap-3 border border-dashed border-zinc-850 hover:border-zinc-700 bg-[#09090b]/40 hover:bg-[#0c0c0e]/60 p-3 cursor-pointer transition-all">
+                    <Upload className="w-4 h-4 text-[#F97316]" />
+                    <div className="text-left">
+                      <span className="text-xs text-zinc-300 font-medium block">Tải ảnh đại diện mới</span>
+                      <span className="text-[9px] text-zinc-500 font-mono">Chấp nhận PNG, JPG, WebP tối đa 1MB</span>
+                    </div>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleImageUpload}
+                      className="hidden"
+                    />
+                  </label>
                 </div>
               </div>
 

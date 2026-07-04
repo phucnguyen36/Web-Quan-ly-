@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { ClientObject, VideoTaskObject, StaffObject, TaskStatus, PaymentStatus, FinancialSummary } from './types';
 import { INITIAL_CLIENTS, INITIAL_STAFF, INITIAL_TASKS } from './initialData';
 
@@ -32,7 +32,7 @@ import {
 import { 
   Layers, TrendingUp, Users, Settings, LogOut, 
   Clock, Database, RefreshCw,
-  Menu, X, Calendar, Trash2, User, Sliders
+  Menu, X, Calendar, Trash2, User, Sliders, Download, Upload
 } from 'lucide-react';
 
 export default function App() {
@@ -383,6 +383,170 @@ export default function App() {
     saveProfile(updatedProfile);
   };
 
+  const handleExportToCSV = () => {
+    const headers = [
+      'ID Task',
+      'ID Khach Hang',
+      'Ten Video',
+      'Link Footage Goc',
+      'Trang Thai',
+      'Han Chot (Deadline)',
+      'ID Nguoi Dung (Editor)',
+      'Ghi Chu',
+      'Chi Tra Khach Hang ($)',
+      'Chi Tra Editor ($)',
+      'Thanh Toan Khach Hang',
+      'Thanh Toan Editor',
+      'Link Rough Cut',
+      'Link Final'
+    ];
+
+    const rows = tasks.map(t => [
+      t.id,
+      t.clientId,
+      t.title,
+      t.rawFootageLink || '',
+      t.status,
+      t.internalDeadline || '',
+      t.assignedEditorId || '',
+      t.notes || '',
+      t.clientPay,
+      t.subPay,
+      t.clientPaidStatus,
+      t.subPaidStatus,
+      t.roughCutUrl || '',
+      t.finalUrl || ''
+    ]);
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => 
+        row.map(val => {
+          const str = String(val ?? '');
+          if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+            return `"${str.replace(/"/g, '""')}"`;
+          }
+          return str;
+        }).join(',')
+      )
+    ].join('\n');
+
+    // Add UTF-8 BOM to prevent Vietnamese text corruption in Excel
+    const BOM = '\uFEFF';
+    const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `deep_focus_tasks_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleImportFromCSV = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const text = evt.target?.result as string;
+        if (!text) return;
+
+        const lines = text.split(/\r?\n/);
+        if (lines.length <= 1) {
+          alert('File CSV rỗng hoặc không hợp lệ.');
+          return;
+        }
+
+        const parseCSVLine = (text: string) => {
+          const result: string[] = [];
+          let current = '';
+          let inQuotes = false;
+          for (let i = 0; i < text.length; i++) {
+            const char = text[i];
+            if (char === '"') {
+              if (inQuotes && text[i + 1] === '"') {
+                current += '"';
+                i++;
+              } else {
+                inQuotes = !inQuotes;
+              }
+            } else if (char === ',' && !inQuotes) {
+              result.push(current);
+              current = '';
+            } else {
+              current += char;
+            }
+          }
+          result.push(current);
+          return result;
+        };
+
+        const parsedTasks: VideoTaskObject[] = [];
+        for (let i = 1; i < lines.length; i++) {
+          if (!lines[i].trim()) continue;
+          const columns = parseCSVLine(lines[i]);
+          if (columns.length < 3) continue;
+
+          const id = columns[0] || `task_${Date.now()}_${i}`;
+          const clientId = columns[1] || 'unassigned';
+          const title = columns[2] || 'Untitled Video';
+          const rawFootageLink = columns[3] || '';
+          const status = (columns[4] || 'Unassigned') as TaskStatus;
+          const internalDeadline = columns[5] || '';
+          const assignedEditorId = columns[6] || 'Unassigned';
+          const notes = columns[7] || '';
+          const clientPay = Number(columns[8]) || 0;
+          const subPay = Number(columns[9]) || 0;
+          const clientPaidStatus = (columns[10] || 'Unpaid') as PaymentStatus;
+          const subPaidStatus = (columns[11] || 'Unpaid') as 'Unpaid' | 'Paid';
+          const roughCutUrl = columns[12] || '';
+          const finalUrl = columns[13] || '';
+
+          parsedTasks.push({
+            id,
+            clientId,
+            title,
+            rawFootageLink,
+            status,
+            internalDeadline,
+            assignedEditorId,
+            notes,
+            clientPay,
+            subPay,
+            clientPaidStatus,
+            subPaidStatus,
+            roughCutUrl,
+            finalUrl
+          });
+        }
+
+        if (parsedTasks.length > 0) {
+          setIsLoading(true);
+          const updatedTasks = [...tasks];
+          for (const pt of parsedTasks) {
+            const idx = updatedTasks.findIndex(t => t.id === pt.id);
+            if (idx >= 0) {
+              updatedTasks[idx] = pt;
+            } else {
+              updatedTasks.push(pt);
+            }
+            await saveTask(pt);
+          }
+          syncTasksToLocal(updatedTasks);
+          setIsLoading(false);
+          alert(`Đã import thành công ${parsedTasks.length} video tasks vào hệ thống Cloud Firebase!`);
+        }
+      } catch (err) {
+        console.error('Error importing CSV:', err);
+        setIsLoading(false);
+        alert('Đã xảy ra lỗi khi parse file CSV. Vui lòng kiểm tra định dạng.');
+      }
+    };
+    reader.readAsText(file, 'utf-8');
+  };
+
   const handleSeedReset = () => {
     setConfirmModal({
       isOpen: true,
@@ -549,6 +713,35 @@ export default function App() {
               </span>
               <span className="text-[9px] font-mono opacity-60">[{staff.length}]</span>
             </button>
+
+            <div className="h-px bg-[rgba(249,115,22,0.15)] my-4"></div>
+            
+            <span className="text-[10px] font-mono uppercase tracking-widest text-[#71717a] px-2 block mb-2">
+              Data Synchronization
+            </span>
+
+            <button
+              onClick={handleExportToCSV}
+              className="w-full text-left px-3 py-2 text-xs font-medium text-[#B8967D] hover:text-[#10b981] hover:bg-[#1E1810]/40 transition-all flex items-center gap-2 cursor-pointer"
+              title="Xuất dữ liệu Tasks ra Excel/CSV"
+            >
+              <Download className="w-3.5 h-3.5 shrink-0 text-[#10b981]" />
+              <span>XUẤT EXCEL / CSV</span>
+            </button>
+
+            <label
+              className="w-full text-left px-3 py-2 text-xs font-medium text-[#B8967D] hover:text-[#06b6d4] hover:bg-[#1E1810]/40 transition-all flex items-center gap-2 cursor-pointer"
+              title="Nhập dữ liệu Tasks từ file CSV"
+            >
+              <Upload className="w-3.5 h-3.5 shrink-0 text-[#06b6d4]" />
+              <span>NHẬP EXCEL / CSV</span>
+              <input
+                type="file"
+                accept=".csv"
+                onChange={handleImportFromCSV}
+                className="hidden"
+              />
+            </label>
 
             <div className="h-px bg-[rgba(249,115,22,0.15)] my-4"></div>
             
@@ -747,6 +940,7 @@ export default function App() {
               onDeleteTask={handleDeleteTask}
               onDeleteTasks={handleDeleteTasks}
               onUpdateTaskStatus={handleUpdateTaskStatus}
+              onSaveTask={handleSaveTask}
               currency={currency}
               denseLayout={profile.denseLayout}
               lowMarginAlert={profile.lowMarginAlert}

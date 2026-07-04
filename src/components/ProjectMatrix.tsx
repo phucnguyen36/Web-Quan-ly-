@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { VideoTaskObject, ClientObject, StaffObject, TaskStatus } from '../types';
 import { 
   Plus, Edit, Trash2, Link, Calendar, User, 
@@ -24,6 +24,7 @@ interface ProjectMatrixProps {
   currency: 'USD' | 'VND';
   denseLayout?: boolean;
   lowMarginAlert?: boolean;
+  onSaveTask?: (task: VideoTaskObject) => void;
 }
 
 interface ColDef {
@@ -45,7 +46,8 @@ export default function ProjectMatrix({
   onUpdateTaskStatus,
   currency,
   denseLayout = false,
-  lowMarginAlert = false
+  lowMarginAlert = false,
+  onSaveTask
 }: ProjectMatrixProps) {
   // Navigation active tab for filtering clients
   const [activeTab, setActiveTab] = useState<string>('all');
@@ -87,6 +89,54 @@ export default function ProjectMatrix({
   useEffect(() => {
     localStorage.setItem('apex_matrix_columns_v2', JSON.stringify(columns));
   }, [columns]);
+
+  // Column Width Resizing State & Event Handlers
+  const [columnWidths, setColumnWidths] = useState<{ [colId: string]: number }>(() => {
+    const saved = localStorage.getItem('deep_focus_col_widths_v2');
+    if (saved) return JSON.parse(saved);
+    return {
+      id: 70,
+      title: 180,
+      clientPay: 100,
+      subPay: 100,
+      netProfit: 110,
+      status: 125,
+      editor: 135,
+      deadline: 135,
+      rawFootage: 160,
+      roughCut: 160,
+      finalUrl: 160,
+      actions: 90
+    };
+  });
+
+  useEffect(() => {
+    localStorage.setItem('deep_focus_col_widths_v2', JSON.stringify(columnWidths));
+  }, [columnWidths]);
+
+  const handleResizeStart = (colId: string, startEvent: React.MouseEvent) => {
+    startEvent.preventDefault();
+    startEvent.stopPropagation();
+    const startX = startEvent.clientX;
+    const startWidth = columnWidths[colId] || 100;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const deltaX = moveEvent.clientX - startX;
+      const newWidth = Math.max(45, startWidth + deltaX);
+      setColumnWidths(prev => ({
+        ...prev,
+        [colId]: newWidth
+      }));
+    };
+
+    const handleMouseUp = () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
 
   const handleCopyLink = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
@@ -289,24 +339,35 @@ export default function ProjectMatrix({
     const titleText = quickTitle[clientId]?.trim();
     if (!titleText) return;
 
+    // Get today's date formatted as YYYY-MM-DD HH:MM
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const day = String(today.getDate()).padStart(2, '0');
+    const defaultDeadline = `${year}-${month}-${day} 18:00`;
+
     const dummyTask: VideoTaskObject = {
       id: `task_${Date.now()}`,
       clientId,
       title: titleText,
-      rawFootageLink: 'https://drive.google.com/drive/folders/sample',
+      rawFootageLink: '',
       status: 'Unassigned',
-      internalDeadline: '2026-07-10 18:00',
+      internalDeadline: defaultDeadline,
       assignedEditorId: 'Unassigned',
-      notes: 'Quick deployed via Matrix Workspace.',
-      clientPay: 500,
-      subPay: 150,
+      notes: 'Quick inline added.',
+      clientPay: 0,
+      subPay: 0,
       clientPaidStatus: 'Unpaid',
       subPaidStatus: 'Unpaid',
       roughCutUrl: '',
       finalUrl: ''
     };
 
-    onEditTaskClick(dummyTask); // Opens modal with these custom starter values
+    if (onSaveTask) {
+      onSaveTask(dummyTask);
+    } else {
+      onEditTaskClick(dummyTask);
+    }
     setQuickTitle(prev => ({ ...prev, [clientId]: '' }));
   };
 
@@ -596,7 +657,7 @@ export default function ProjectMatrix({
                     <table className="w-full text-left border-collapse min-w-[900px]">
                       <thead>
                         <tr className="text-[9px] font-mono text-zinc-500 uppercase border-b border-zinc-900 tracking-wider select-none">
-                          <th className="py-2.5 px-3 text-center w-8">
+                          <th className="py-2.5 px-3 text-center w-8 min-w-8 max-w-8">
                             <input
                               type="checkbox"
                               checked={clientTasks.length > 0 && clientTasks.every(t => selectedTaskIds.includes(t.id))}
@@ -607,18 +668,29 @@ export default function ProjectMatrix({
                           {activeColumns.map(col => {
                             let sortKey = col.id;
                             if (col.id === 'editor') sortKey = 'assignedEditorId';
+                            const colWidth = columnWidths[col.id] || 120;
                             return (
                               <th 
                                 key={col.id} 
-                                onClick={() => handleHeaderSortClick(sortKey)}
-                                className={`py-2.5 px-3 cursor-pointer hover:text-white transition-colors group ${
+                                style={{ width: colWidth, minWidth: colWidth, maxWidth: colWidth }}
+                                className={`relative py-2.5 px-3 hover:text-white transition-colors group select-none ${
                                   col.type === 'money' ? 'text-right' : ''
                                 }`}
                               >
-                                <div className={`flex items-center gap-1 ${col.type === 'money' ? 'justify-end' : ''}`}>
+                                <div 
+                                  onClick={() => handleHeaderSortClick(sortKey)}
+                                  className={`flex items-center gap-1 cursor-pointer truncate ${col.type === 'money' ? 'justify-end' : ''}`}
+                                >
                                   {col.label}
-                                  <ArrowUpDown className="w-2.5 h-2.5 opacity-30 group-hover:opacity-100 transition-opacity" />
+                                  <ArrowUpDown className="w-2.5 h-2.5 opacity-30 group-hover:opacity-100 transition-opacity shrink-0" />
                                 </div>
+                                {/* Column drag resizer handle */}
+                                <div
+                                  onMouseDown={(e) => handleResizeStart(col.id, e)}
+                                  onClick={(e) => { e.stopPropagation(); e.preventDefault(); }}
+                                  className="absolute top-0 right-0 h-full w-1.5 cursor-col-resize hover:bg-[#F97316]/50 active:bg-[#F97316] transition-colors z-20"
+                                  title="Kéo để chỉnh độ rộng cột"
+                                />
                               </th>
                             );
                           })}
@@ -648,9 +720,14 @@ export default function ProjectMatrix({
 
                               {/* Visible Columns Renderer */}
                               {activeColumns.map(col => {
+                                const colWidth = columnWidths[col.id] || 120;
                                 if (col.id === 'id') {
                                   return (
-                                    <td key={col.id} className={`${denseLayout ? 'py-1 px-2' : 'py-2.5 px-3'} text-[#71717a] font-bold text-[10px]`}>
+                                    <td 
+                                      key={col.id} 
+                                      style={{ width: colWidth, minWidth: colWidth, maxWidth: colWidth }}
+                                      className={`${denseLayout ? 'py-1 px-2' : 'py-2.5 px-3'} text-[#71717a] font-bold text-[10px] truncate`}
+                                    >
                                       {task.id.replace('task_', 'TX_')}
                                     </td>
                                   );
@@ -658,12 +735,16 @@ export default function ProjectMatrix({
 
                                 if (col.id === 'title') {
                                   return (
-                                    <td key={col.id} className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'}`}>
+                                    <td 
+                                      key={col.id} 
+                                      style={{ width: colWidth, minWidth: colWidth, maxWidth: colWidth }}
+                                      className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'} truncate`}
+                                    >
                                       <input
                                         type="text"
                                         value={task.title}
                                         onChange={(e) => onUpdateTaskStatus(task.id, task.status, { title: e.target.value })}
-                                        className="bg-transparent border-b border-transparent hover:border-zinc-800 focus:border-[#ef4444] text-[#f4f4f5] font-sans text-xs font-semibold focus:outline-none w-full px-1 py-0.5"
+                                        className="bg-transparent border-b border-transparent hover:border-zinc-800 focus:border-[#ef4444] text-[#f4f4f5] font-sans text-xs font-semibold focus:outline-none w-full px-1 py-0.5 truncate text-left"
                                         title="Click to edit name directly"
                                       />
                                     </td>
@@ -672,14 +753,18 @@ export default function ProjectMatrix({
 
                                 if (col.id === 'clientPay') {
                                   return (
-                                    <td key={col.id} className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'} text-right`}>
-                                      <div className="flex items-center justify-end">
+                                    <td 
+                                      key={col.id} 
+                                      style={{ width: colWidth, minWidth: colWidth, maxWidth: colWidth }}
+                                      className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'} text-right truncate`}
+                                    >
+                                      <div className="flex items-center justify-end w-full">
                                         <span className="text-zinc-600 mr-0.5">$</span>
                                         <input
                                           type="number"
                                           value={task.clientPay}
                                           onChange={(e) => onUpdateTaskStatus(task.id, task.status, { clientPay: Number(e.target.value) })}
-                                          className="bg-transparent border-b border-transparent hover:border-zinc-800 focus:border-[#F97316] text-[#F0E6D8] text-right font-mono text-xs focus:outline-none w-14 px-1"
+                                          className="bg-transparent border-b border-transparent hover:border-zinc-800 focus:border-[#F97316] text-[#F0E6D8] text-right font-mono text-xs focus:outline-none w-full max-w-[80px] px-1"
                                           title="Click to edit client pay directly"
                                         />
                                       </div>
@@ -689,14 +774,18 @@ export default function ProjectMatrix({
 
                                 if (col.id === 'subPay') {
                                   return (
-                                    <td key={col.id} className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'} text-right`}>
-                                      <div className="flex items-center justify-end">
+                                    <td 
+                                      key={col.id} 
+                                      style={{ width: colWidth, minWidth: colWidth, maxWidth: colWidth }}
+                                      className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'} text-right truncate`}
+                                    >
+                                      <div className="flex items-center justify-end w-full">
                                         <span className="text-zinc-600 mr-0.5">$</span>
                                         <input
                                           type="number"
                                           value={task.subPay}
                                           onChange={(e) => onUpdateTaskStatus(task.id, task.status, { subPay: Number(e.target.value) })}
-                                          className="bg-transparent border-b border-transparent hover:border-zinc-800 focus:border-[#F97316] text-zinc-300 text-right font-mono text-xs focus:outline-none w-14 px-1"
+                                          className="bg-transparent border-b border-transparent hover:border-zinc-800 focus:border-[#F97316] text-zinc-300 text-right font-mono text-xs focus:outline-none w-full max-w-[80px] px-1"
                                           title="Click to edit sub pay directly"
                                         />
                                       </div>
@@ -708,12 +797,16 @@ export default function ProjectMatrix({
                                   const marginPercent = task.clientPay > 0 ? ((task.clientPay - task.subPay) / task.clientPay) * 100 : 0;
                                   const showWarning = lowMarginAlert && marginPercent < 35 && task.clientPay > 0 && profit > 0;
                                   return (
-                                    <td key={col.id} className={`${denseLayout ? 'py-1 px-2' : 'py-2.5 px-3'} text-right font-black ${profit > 0 ? 'text-emerald-400' : 'text-zinc-500'}`}>
-                                      <div className="flex flex-col items-end">
-                                        <span>{formatPrice(profit)}</span>
+                                    <td 
+                                      key={col.id} 
+                                      style={{ width: colWidth, minWidth: colWidth, maxWidth: colWidth }}
+                                      className={`${denseLayout ? 'py-1 px-2' : 'py-2.5 px-3'} text-right font-black ${profit > 0 ? 'text-emerald-400' : 'text-zinc-500'} truncate`}
+                                    >
+                                      <div className="flex flex-col items-end w-full">
+                                        <span className="truncate">{formatPrice(profit)}</span>
                                         {showWarning && (
-                                          <span className="text-[8px] text-amber-500 font-mono font-bold animate-pulse uppercase tracking-tight">
-                                            ⚠️ LOW MARGIN ({marginPercent.toFixed(0)}%)
+                                          <span className="text-[8px] text-amber-500 font-mono font-bold animate-pulse uppercase tracking-tight truncate">
+                                            ⚠️ LOW ({marginPercent.toFixed(0)}%)
                                           </span>
                                         )}
                                       </div>
@@ -730,13 +823,17 @@ export default function ProjectMatrix({
                                     return 'bg-zinc-500';
                                   };
                                   return (
-                                    <td key={col.id} className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'}`}>
-                                      <div className="flex items-center gap-1.5 select-none">
+                                    <td 
+                                      key={col.id} 
+                                      style={{ width: colWidth, minWidth: colWidth, maxWidth: colWidth }}
+                                      className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'} truncate`}
+                                    >
+                                      <div className="flex items-center gap-1.5 select-none w-full overflow-hidden">
                                         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${getStatusColor(task.status)}`} />
                                         <select
                                           value={task.status}
                                           onChange={(e) => onUpdateTaskStatus(task.id, e.target.value as TaskStatus)}
-                                          className="bg-transparent border-none text-zinc-300 text-[10px] font-bold uppercase focus:outline-none cursor-pointer p-0 select-none tracking-wider"
+                                          className="bg-transparent border-none text-zinc-300 text-[10px] font-bold uppercase focus:outline-none cursor-pointer p-0 select-none tracking-wider w-full truncate"
                                         >
                                           <option value="Unassigned" className="bg-black text-zinc-400">Unassigned</option>
                                           <option value="Rough Cut" className="bg-black text-cyan-400">Rough Cut</option>
@@ -751,11 +848,15 @@ export default function ProjectMatrix({
 
                                 if (col.id === 'editor') {
                                   return (
-                                    <td key={col.id} className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'}`}>
+                                    <td 
+                                      key={col.id} 
+                                      style={{ width: colWidth, minWidth: colWidth, maxWidth: colWidth }}
+                                      className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'} truncate`}
+                                    >
                                       <select
                                         value={task.assignedEditorId}
                                         onChange={(e) => onUpdateTaskStatus(task.id, task.status, { assignedEditorId: e.target.value })}
-                                        className="bg-transparent border-b border-transparent hover:border-zinc-800 text-zinc-300 text-[10px] font-sans focus:outline-none cursor-pointer max-w-[130px]"
+                                        className="bg-transparent border-b border-transparent hover:border-zinc-800 text-zinc-300 text-[10px] font-sans focus:outline-none cursor-pointer w-full truncate"
                                       >
                                         <option value="Unassigned">Unassigned</option>
                                         <option value="Phuc">Phuc (Lead)</option>
@@ -769,12 +870,16 @@ export default function ProjectMatrix({
 
                                 if (col.id === 'deadline') {
                                   return (
-                                    <td key={col.id} className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'}`}>
+                                    <td 
+                                      key={col.id} 
+                                      style={{ width: colWidth, minWidth: colWidth, maxWidth: colWidth }}
+                                      className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'} truncate`}
+                                    >
                                       <input
                                         type="text"
                                         value={task.internalDeadline}
                                         onChange={(e) => onUpdateTaskStatus(task.id, task.status, { internalDeadline: e.target.value })}
-                                        className={`bg-transparent border-b border-transparent hover:border-zinc-800 focus:border-[#ef4444] text-[10px] font-mono focus:outline-none w-28 ${getDeadlineStyle(task.internalDeadline, task.status)}`}
+                                        className={`bg-transparent border-b border-transparent hover:border-zinc-800 focus:border-[#ef4444] text-[10px] font-mono focus:outline-none w-full ${getDeadlineStyle(task.internalDeadline, task.status)}`}
                                         title="Format: YYYY-MM-DD HH:MM. Click to edit."
                                       />
                                     </td>
@@ -783,13 +888,17 @@ export default function ProjectMatrix({
 
                                 if (col.id === 'rawFootage') {
                                   return (
-                                    <td key={col.id} className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'}`}>
-                                      <div className="flex items-center gap-1">
+                                    <td 
+                                      key={col.id} 
+                                      style={{ width: colWidth, minWidth: colWidth, maxWidth: colWidth }}
+                                      className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'} truncate`}
+                                    >
+                                      <div className="flex items-center gap-1 w-full overflow-hidden">
                                         <input
                                           type="text"
                                           value={task.rawFootageLink}
                                           onChange={(e) => onUpdateTaskStatus(task.id, task.status, { rawFootageLink: e.target.value })}
-                                          className="bg-transparent border-b border-transparent hover:border-zinc-800 focus:border-[#ef4444] text-zinc-400 font-mono text-[9px] focus:outline-none w-24 truncate px-0.5"
+                                          className="bg-transparent border-b border-transparent hover:border-zinc-800 focus:border-[#ef4444] text-zinc-400 font-mono text-[9px] focus:outline-none w-full truncate px-0.5"
                                         />
                                         {task.rawFootageLink && (
                                           <a
@@ -809,14 +918,18 @@ export default function ProjectMatrix({
 
                                 if (col.id === 'roughCut') {
                                   return (
-                                    <td key={col.id} className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'}`}>
-                                      <div className="flex items-center gap-1">
+                                    <td 
+                                      key={col.id} 
+                                      style={{ width: colWidth, minWidth: colWidth, maxWidth: colWidth }}
+                                      className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'} truncate`}
+                                    >
+                                      <div className="flex items-center gap-1 w-full overflow-hidden">
                                         <input
                                           type="text"
                                           placeholder="Empty link..."
                                           value={task.roughCutUrl || ''}
                                           onChange={(e) => onUpdateTaskStatus(task.id, task.status, { roughCutUrl: e.target.value })}
-                                          className="bg-transparent border-b border-transparent hover:border-zinc-800 focus:border-[#ef4444] text-[#06b6d4] font-mono text-[9px] focus:outline-none w-24 truncate px-0.5"
+                                          className="bg-transparent border-b border-transparent hover:border-zinc-800 focus:border-[#ef4444] text-[#06b6d4] font-mono text-[9px] focus:outline-none w-full truncate px-0.5"
                                         />
                                         {task.roughCutUrl && (
                                           <a
@@ -836,14 +949,18 @@ export default function ProjectMatrix({
 
                                 if (col.id === 'finalUrl') {
                                   return (
-                                    <td key={col.id} className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'}`}>
-                                      <div className="flex items-center gap-1">
+                                    <td 
+                                      key={col.id} 
+                                      style={{ width: colWidth, minWidth: colWidth, maxWidth: colWidth }}
+                                      className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'} truncate`}
+                                    >
+                                      <div className="flex items-center gap-1 w-full overflow-hidden">
                                         <input
                                           type="text"
                                           placeholder="Empty final..."
                                           value={task.finalUrl || ''}
                                           onChange={(e) => onUpdateTaskStatus(task.id, task.status, { finalUrl: e.target.value })}
-                                          className="bg-transparent border-b border-transparent hover:border-zinc-800 focus:border-white text-emerald-400 font-mono text-[9px] focus:outline-none w-24 truncate px-0.5"
+                                          className="bg-transparent border-b border-transparent hover:border-zinc-800 focus:border-white text-emerald-400 font-mono text-[9px] focus:outline-none w-full truncate px-0.5"
                                         />
                                         {task.finalUrl && (
                                           <a
@@ -863,7 +980,11 @@ export default function ProjectMatrix({
 
                                 if (col.id === 'actions') {
                                   return (
-                                    <td key={col.id} className={`${denseLayout ? 'py-1 px-2' : 'py-2.5 px-3'}`}>
+                                    <td 
+                                      key={col.id} 
+                                      style={{ width: colWidth, minWidth: colWidth, maxWidth: colWidth }}
+                                      className={`${denseLayout ? 'py-1 px-2' : 'py-2.5 px-3'} truncate`}
+                                    >
                                       <div className="flex items-center gap-2">
                                         <button
                                           onClick={() => onEditTaskClick(task)}
