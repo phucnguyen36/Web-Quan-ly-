@@ -1,0 +1,1026 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import { useState, useEffect, useMemo } from 'react';
+import { VideoTaskObject, ClientObject, StaffObject, TaskStatus } from '../types';
+import { 
+  Plus, Edit, Trash2, Link, Calendar, User, 
+  Layers, CheckCircle2, PlayCircle, Eye, AlertCircle, Copy, Check, Star,
+  Settings, ChevronDown, ChevronUp, ArrowUpDown, EyeOff, Trash, MoveLeft, MoveRight
+} from 'lucide-react';
+
+interface ProjectMatrixProps {
+  tasks: VideoTaskObject[];
+  clients: ClientObject[];
+  staff: StaffObject[];
+  role: 'admin' | 'staff';
+  onAddTaskClick: () => void;
+  onEditTaskClick: (task: VideoTaskObject) => void;
+  onDeleteTask: (taskId: string) => void;
+  onDeleteTasks?: (taskIds: string[]) => void;
+  onUpdateTaskStatus: (taskId: string, status: TaskStatus, updates?: Partial<VideoTaskObject>) => void;
+  currency: 'USD' | 'VND';
+  denseLayout?: boolean;
+  lowMarginAlert?: boolean;
+}
+
+interface ColDef {
+  id: string;
+  label: string;
+  visible: boolean;
+  type: 'id' | 'text' | 'money' | 'status' | 'editor' | 'date' | 'link' | 'notes' | 'actions';
+}
+
+export default function ProjectMatrix({ 
+  tasks, 
+  clients, 
+  staff, 
+  role, 
+  onAddTaskClick, 
+  onEditTaskClick, 
+  onDeleteTask, 
+  onDeleteTasks,
+  onUpdateTaskStatus,
+  currency,
+  denseLayout = false,
+  lowMarginAlert = false
+}: ProjectMatrixProps) {
+  // Navigation active tab for filtering clients
+  const [activeTab, setActiveTab] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  
+  // Customization: Column Configuration
+  const [columns, setColumns] = useState<ColDef[]>(() => {
+    const saved = localStorage.getItem('apex_matrix_columns_v2');
+    if (saved) return JSON.parse(saved);
+    return [
+      { id: 'id', label: 'BLOCK ID', visible: true, type: 'id' },
+      { id: 'title', label: 'Video Name', visible: true, type: 'text' },
+      { id: 'clientPay', label: 'Client Pay', visible: true, type: 'money' },
+      { id: 'subPay', label: 'Sub Pay', visible: true, type: 'money' },
+      { id: 'netProfit', label: 'Profit Yield', visible: true, type: 'money' },
+      { id: 'status', label: 'Workflow Status', visible: true, type: 'status' },
+      { id: 'editor', label: 'Operator', visible: true, type: 'editor' },
+      { id: 'deadline', label: 'Deadline Target', visible: true, type: 'date' },
+      { id: 'rawFootage', label: 'Raw Footage Link', visible: true, type: 'link' },
+      { id: 'roughCut', label: 'Rough Cut Link', visible: true, type: 'link' },
+      { id: 'finalUrl', label: 'Final Delivery Link', visible: true, type: 'link' },
+      { id: 'actions', label: 'Actions', visible: true, type: 'actions' },
+    ];
+  });
+
+  const [isColumnConfigOpen, setIsColumnConfigOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<'table' | 'deck'>('table');
+  
+  // Row selection for bulk actions
+  const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
+  const [isBulkDeleteConfirming, setIsBulkDeleteConfirming] = useState(false);
+  
+  // Sorting state
+  const [sortField, setSortField] = useState<string>('id');
+  const [sortAsc, setSortAsc] = useState<boolean>(true);
+
+  // Persistence of column configuration
+  useEffect(() => {
+    localStorage.setItem('apex_matrix_columns_v2', JSON.stringify(columns));
+  }, [columns]);
+
+  const handleCopyLink = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 1500);
+  };
+
+  const getClientName = (clientId: string) => {
+    const client = clients.find(c => c.id === clientId);
+    return client ? client.displayName : 'Unknown Client';
+  };
+
+  const getClientTier = (clientId: string) => {
+    const client = clients.find(c => c.id === clientId);
+    return client ? client.tier : 'Volume-Arbitrage';
+  };
+
+  const getEditorName = (editorId: string) => {
+    if (editorId === 'Unassigned') return 'Claimable Pool';
+    if (editorId === 'Phuc') return 'Phuc (Master Editor)';
+    const ed = staff.find(s => s.id === editorId);
+    return ed ? ed.name : 'Unknown Editor';
+  };
+
+  // Toggle dynamic column visibility
+  const toggleColumnVisibility = (colId: string) => {
+    setColumns(prev => prev.map(c => c.id === colId ? { ...c, visible: !c.visible } : c));
+  };
+
+  // Reorder columns: shift left or right in UI array
+  const moveColumn = (index: number, direction: 'left' | 'right') => {
+    const nextIndex = direction === 'left' ? index - 1 : index + 1;
+    if (nextIndex < 0 || nextIndex >= columns.length) return;
+    
+    setColumns(prev => {
+      const updated = [...prev];
+      const temp = updated[index];
+      updated[index] = updated[nextIndex];
+      updated[nextIndex] = temp;
+      return updated;
+    });
+  };
+
+  // Update customized column label text
+  const renameColumnLabel = (colId: string, newLabel: string) => {
+    setColumns(prev => prev.map(c => c.id === colId ? { ...c, label: newLabel } : c));
+  };
+
+  // Filtering based on search query and active tab
+  const filteredTasks = useMemo(() => {
+    return tasks.filter(task => {
+      const matchesTab = activeTab === 'all' || 
+                         task.clientId === activeTab ||
+                         (activeTab === 'unassigned' && (!task.clientId || !clients.some(c => c.id === task.clientId)));
+      const matchesSearch = task.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                            getEditorName(task.assignedEditorId).toLowerCase().includes(searchQuery.toLowerCase()) ||
+                            getClientName(task.clientId).toLowerCase().includes(searchQuery.toLowerCase()) ||
+                            task.id.toLowerCase().includes(searchQuery.toLowerCase());
+      return matchesTab && matchesSearch;
+    });
+  }, [tasks, activeTab, searchQuery, staff, clients]);
+
+  // Sorting
+  const sortedTasks = useMemo(() => {
+    const sorted = [...filteredTasks];
+    sorted.sort((a, b) => {
+      let valA: any = a[sortField as keyof VideoTaskObject] || '';
+      let valB: any = b[sortField as keyof VideoTaskObject] || '';
+
+      if (sortField === 'id') {
+        valA = parseInt(a.id.replace(/\D/g, '')) || 0;
+        valB = parseInt(b.id.replace(/\D/g, '')) || 0;
+      } else if (sortField === 'netProfit') {
+        valA = a.clientPay - a.subPay;
+        valB = b.clientPay - b.subPay;
+      } else if (sortField === 'editor') {
+        valA = getEditorName(a.assignedEditorId);
+        valB = getEditorName(b.assignedEditorId);
+      } else if (sortField === 'clientName') {
+        valA = getClientName(a.clientId);
+        valB = getClientName(b.clientId);
+      }
+
+      if (valA < valB) return sortAsc ? -1 : 1;
+      if (valA > valB) return sortAsc ? 1 : -1;
+      return 0;
+    });
+    return sorted;
+  }, [filteredTasks, sortField, sortAsc, staff, clients]);
+
+  // Group tasks by client for the "Grouped Table View" when tab is "all"
+  const tasksByClient = useMemo(() => {
+    const groups: { [clientId: string]: VideoTaskObject[] } = {};
+    clients.forEach(c => {
+      groups[c.id] = [];
+    });
+    
+    sortedTasks.forEach(task => {
+      if (!groups[task.clientId]) {
+        groups[task.clientId] = [];
+      }
+      groups[task.clientId].push(task);
+    });
+    return groups;
+  }, [sortedTasks, clients]);
+
+  // Check if there are any tasks with no active client
+  const hasOrphanedTasks = useMemo(() => {
+    return tasks.some(task => !clients.some(c => c.id === task.clientId));
+  }, [tasks, clients]);
+
+  // Client groups to render in matrix tables list
+  const clientGroupsToRender = useMemo(() => {
+    const baseClients = clients.filter(c => activeTab === 'all' || c.id === activeTab);
+    
+    // Check if we have any orphaned tasks in the current sorted list
+    const orphanedInSorted = sortedTasks.some(task => !clients.some(c => c.id === task.clientId));
+    
+    if (orphanedInSorted && (activeTab === 'all' || activeTab === 'unassigned')) {
+      return [
+        ...baseClients,
+        { id: 'unassigned', displayName: 'Unassigned & Detached Video Tasks', tier: 'High-Ticket' as const }
+      ];
+    }
+    return baseClients;
+  }, [clients, sortedTasks, activeTab]);
+
+  const handleHeaderSortClick = (field: string) => {
+    if (sortField === field) {
+      setSortAsc(prev => !prev);
+    } else {
+      setSortField(field);
+      setSortAsc(true);
+    }
+  };
+
+  const getDeadlineStyle = (deadlineStr: string, status: TaskStatus) => {
+    if (status === 'Approved') return 'text-[#71717a]';
+    try {
+      const taskDate = new Date(deadlineStr.replace(' ', 'T'));
+      const now = new Date();
+      const diffMs = taskDate.getTime() - now.getTime();
+      const diffHours = diffMs / (1000 * 60 * 60);
+
+      if (diffHours < 0) return 'text-red-500 font-bold'; // overdue
+      if (diffHours < 24) return 'text-amber-500 font-bold'; // under 24 hours
+      return 'text-emerald-500';
+    } catch {
+      return 'text-zinc-400';
+    }
+  };
+
+  const formatPrice = (val: number) => {
+    if (currency === 'VND') {
+      return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(val * 25000);
+    }
+    return `$${val}`;
+  };
+
+  // Bulk operation handlers
+  const handleSelectAllRows = (taskIds: string[], checked: boolean) => {
+    if (checked) {
+      setSelectedTaskIds(prev => Array.from(new Set([...prev, ...taskIds])));
+    } else {
+      setSelectedTaskIds(prev => prev.filter(id => !taskIds.includes(id)));
+    }
+  };
+
+  const handleSelectRow = (taskId: string, checked: boolean) => {
+    if (checked) {
+      setSelectedTaskIds(prev => [...prev, taskId]);
+    } else {
+      setSelectedTaskIds(prev => prev.filter(id => id !== taskId));
+    }
+  };
+
+  const handleBulkStatusChange = (status: TaskStatus) => {
+    selectedTaskIds.forEach(id => {
+      onUpdateTaskStatus(id, status);
+    });
+    setSelectedTaskIds([]);
+  };
+
+  const handleBulkDelete = () => {
+    if (onDeleteTasks) {
+      onDeleteTasks(selectedTaskIds);
+    } else {
+      selectedTaskIds.forEach(id => {
+        onDeleteTask(id);
+      });
+    }
+    setSelectedTaskIds([]);
+    setIsBulkDeleteConfirming(false);
+  };
+
+  // Quick inline creation templates
+  const [quickTitle, setQuickTitle] = useState<{ [clientId: string]: string }>({});
+
+  const handleQuickAdd = (clientId: string) => {
+    const titleText = quickTitle[clientId]?.trim();
+    if (!titleText) return;
+
+    const dummyTask: VideoTaskObject = {
+      id: `task_${Date.now()}`,
+      clientId,
+      title: titleText,
+      rawFootageLink: 'https://drive.google.com/drive/folders/sample',
+      status: 'Unassigned',
+      internalDeadline: '2026-07-10 18:00',
+      assignedEditorId: 'Unassigned',
+      notes: 'Quick deployed via Matrix Workspace.',
+      clientPay: 500,
+      subPay: 150,
+      clientPaidStatus: 'Unpaid',
+      subPaidStatus: 'Unpaid',
+      roughCutUrl: '',
+      finalUrl: ''
+    };
+
+    onEditTaskClick(dummyTask); // Opens modal with these custom starter values
+    setQuickTitle(prev => ({ ...prev, [clientId]: '' }));
+  };
+
+  // List of active columns to render in table header/body
+  const activeColumns = useMemo(() => columns.filter(c => c.visible), [columns]);
+
+  return (
+    <div id="project-matrix-panel" className="space-y-6">
+      {/* Header Panel */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-zinc-900 pb-6">
+        <div>
+          <h2 className="text-2xl font-serif font-light tracking-tight text-zinc-100 uppercase">
+            Production Matrix Workspace
+          </h2>
+          <p className="text-[10px] font-mono text-zinc-500 mt-1 uppercase tracking-wider">
+            Elite custom matrix sheet configured for APEX Editors [SECURED V2]
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+          {/* View Mode Toggle */}
+          <div className="flex bg-zinc-950/40 border border-zinc-900 p-0.5 rounded-none text-[9px] font-mono">
+            <button
+              onClick={() => setViewMode('table')}
+              className={`px-3 py-1 rounded-none uppercase tracking-wider cursor-pointer transition-colors ${viewMode === 'table' ? 'bg-zinc-900 text-white font-bold' : 'text-zinc-500 hover:text-zinc-300'}`}
+            >
+              Interactive Sheet
+            </button>
+            <button
+              onClick={() => setViewMode('deck')}
+              className={`px-3 py-1 rounded-none uppercase tracking-wider cursor-pointer transition-colors ${viewMode === 'deck' ? 'bg-zinc-900 text-white font-bold' : 'text-zinc-500 hover:text-zinc-300'}`}
+            >
+              Classic Deck
+            </button>
+          </div>
+
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Tìm kiếm task, client, editor..."
+            className="px-3 py-1.5 bg-zinc-950/20 text-zinc-200 font-mono placeholder-zinc-600 border border-zinc-900 rounded-none focus:outline-none focus:border-zinc-700 text-[10px] w-full sm:w-44"
+          />
+
+          <button
+            id="add-task-btn"
+            onClick={onAddTaskClick}
+            className="px-4 py-1.5 bg-white hover:bg-zinc-200 text-black font-mono font-bold text-[10px] uppercase rounded-none transition-colors flex items-center gap-1 cursor-pointer w-full sm:w-auto justify-center shadow-[0_0_15px_rgba(255,255,255,0.15)]"
+          >
+            <Plus className="w-3.5 h-3.5" /> Deploy Project
+          </button>
+
+          {/* Column Config Dropdown Toggle */}
+          <button
+            onClick={() => setIsColumnConfigOpen(!isColumnConfigOpen)}
+            className={`px-4 py-1.5 bg-transparent hover:bg-zinc-950 text-zinc-300 font-mono text-[10px] uppercase rounded-none border transition-colors flex items-center gap-1.5 cursor-pointer ${isColumnConfigOpen ? 'border-zinc-400 text-white' : 'border-zinc-800'}`}
+          >
+            <Settings className="w-3.5 h-3.5 text-zinc-400" /> Customize Columns
+          </button>
+        </div>
+      </div>
+
+      {/* Column Customizer Panel (Slide-out menu/Popover style) */}
+      {isColumnConfigOpen && (
+        <div className="bg-black/80 border border-[#1e293b] rounded-sm p-4 text-xs space-y-4 shadow-[0_0_20px_rgba(239,68,68,0.08)]">
+          <div className="flex justify-between items-center border-b border-[#1e293b] pb-2">
+            <span className="font-mono text-[10px] uppercase tracking-wider text-white flex items-center gap-1.5">
+              <Settings className="w-3.5 h-3.5 text-[#ef4444]" />
+              APEX Column Configurator Panel
+            </span>
+            <button 
+              onClick={() => setIsColumnConfigOpen(false)}
+              className="text-[#71717a] hover:text-[#f4f4f5] font-mono text-[9px]"
+            >
+              [CLOSE]
+            </button>
+          </div>
+
+          <p className="text-[10px] font-sans text-[#71717a] leading-normal">
+            Configure visible columns, rename column headers, or shift their positions. Your preferences are saved automatically.
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {columns.map((col, idx) => (
+              <div key={col.id} className="flex items-center justify-between p-2 bg-[#09090b] border border-zinc-900 rounded-sm">
+                <div className="flex items-center gap-2 flex-1 min-w-0 mr-2">
+                  <input
+                    type="checkbox"
+                    checked={col.visible}
+                    onChange={() => toggleColumnVisibility(col.id)}
+                    className="accent-[#ef4444] cursor-pointer"
+                    id={`col-chk-${col.id}`}
+                  />
+                  {/* Dynamic Column Label Input */}
+                  <input
+                    type="text"
+                    value={col.label}
+                    onChange={(e) => renameColumnLabel(col.id, e.target.value)}
+                    className="bg-transparent border-b border-transparent hover:border-zinc-800 focus:border-[#ef4444] text-[#f4f4f5] text-[10px] font-mono focus:outline-none w-full px-1 py-0.5 truncate"
+                    title="Click to rename"
+                  />
+                </div>
+
+                <div className="flex gap-1">
+                  <button
+                    disabled={idx === 0}
+                    onClick={() => moveColumn(idx, 'left')}
+                    className="p-1 hover:bg-zinc-800 disabled:opacity-30 rounded-sm text-zinc-400 cursor-pointer"
+                    title="Move column left"
+                  >
+                    <MoveLeft className="w-3 h-3" />
+                  </button>
+                  <button
+                    disabled={idx === columns.length - 1}
+                    onClick={() => moveColumn(idx, 'right')}
+                    className="p-1 hover:bg-zinc-800 disabled:opacity-30 rounded-sm text-zinc-400 cursor-pointer"
+                    title="Move column right"
+                  >
+                    <MoveRight className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* APEX-Style Segment Tab Filter */}
+      <div id="apex-segment-tabs" className="flex items-center gap-2 py-1 border-b border-zinc-900 overflow-x-auto select-none">
+        <button
+          onClick={() => setActiveTab('all')}
+          className={`px-4 py-2 text-[10px] font-mono font-bold uppercase rounded-none tracking-wider transition-all shrink-0 ${
+            activeTab === 'all' 
+              ? 'text-white border-b-2 border-white' 
+              : 'text-zinc-500 hover:text-zinc-300'
+          }`}
+        >
+          [ALL MATRIX WORKSPACE]
+        </button>
+        {clients.map(client => (
+          <button
+            key={client.id}
+            onClick={() => setActiveTab(client.id)}
+            className={`px-4 py-2 text-[10px] font-mono font-medium rounded-none tracking-wider transition-all shrink-0 ${
+              activeTab === client.id 
+                ? 'text-white border-b-2 border-white font-bold' 
+                : 'text-zinc-500 hover:text-zinc-300'
+            }`}
+          >
+            {client.displayName}
+          </button>
+        ))}
+        {hasOrphanedTasks && (
+          <button
+            onClick={() => setActiveTab('unassigned')}
+            className={`px-4 py-2 text-[10px] font-mono font-bold uppercase rounded-none tracking-wider transition-all shrink-0 ${
+              activeTab === 'unassigned' 
+                ? 'text-red-400 border-b-2 border-red-400' 
+                : 'text-red-500/60 hover:text-red-400'
+            }`}
+          >
+            [UNASSIGNED/ORPHANED]
+          </button>
+        )}
+      </div>
+
+      {/* Bulk Action Controls */}
+      {selectedTaskIds.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-[#ef4444]/10 border border-[#ef4444]/30 rounded-sm text-xs font-mono text-[#f4f4f5] animate-fade-in">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 bg-[#ef4444] rounded-full animate-ping"></span>
+            <span>Selected <strong>{selectedTaskIds.length}</strong> videos for batch operations:</span>
+          </div>
+
+          <div className="flex flex-wrap gap-2 items-center">
+            <span className="text-[10px] text-zinc-400 font-bold uppercase">Change Status:</span>
+            {['Unassigned', 'Rough Cut', 'Final Polish', 'Client Review', 'Approved'].map(st => (
+              <button
+                key={st}
+                onClick={() => handleBulkStatusChange(st as TaskStatus)}
+                className="px-2 py-0.5 bg-zinc-900 hover:bg-[#ef4444] hover:text-white text-[9px] uppercase font-bold border border-zinc-800 rounded-sm transition-colors cursor-pointer"
+              >
+                {st}
+              </button>
+            ))}
+            <div className="h-4 w-[1px] bg-zinc-800 mx-1"></div>
+            {isBulkDeleteConfirming ? (
+              <div className="flex items-center gap-1.5 bg-red-950/40 p-1 border border-red-700/30 rounded-sm">
+                <span className="text-[9px] uppercase font-black text-red-400">Bạn có chắc chắn?</span>
+                <button
+                  onClick={handleBulkDelete}
+                  className="px-2 py-0.5 bg-red-600 hover:bg-red-700 text-white text-[9px] uppercase font-black rounded-sm cursor-pointer"
+                >
+                  Xác nhận xóa ({selectedTaskIds.length})
+                </button>
+                <button
+                  onClick={() => setIsBulkDeleteConfirming(false)}
+                  className="px-2 py-0.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[9px] uppercase font-bold rounded-sm cursor-pointer"
+                >
+                  Hủy
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setIsBulkDeleteConfirming(true)}
+                className="px-2.5 py-0.5 bg-red-950/80 border border-red-700/50 hover:bg-red-800 text-white hover:text-white text-[9px] uppercase font-bold rounded-sm transition-colors cursor-pointer flex items-center gap-1"
+              >
+                <Trash className="w-3 h-3" /> Delete Selected
+              </button>
+            )}
+            <button
+              onClick={() => setSelectedTaskIds([])}
+              className="px-2 py-0.5 bg-zinc-950 border border-zinc-800 text-[#71717a] hover:text-white text-[9px] uppercase rounded-sm transition-colors cursor-pointer"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Main Content Area */}
+      {sortedTasks.length === 0 ? (
+        <div className="p-12 border border-[#1e293b] border-dashed rounded-sm text-center bg-[#09090b]/40">
+          <AlertCircle className="w-7 h-7 text-[#71717a] mx-auto mb-3" />
+          <p className="text-xs font-mono text-[#71717a]">NO ACTIVE VIDEO TASK VECTORS CAPTURED IN THIS SPHERE</p>
+          {role === 'admin' && (
+            <button 
+              onClick={onAddTaskClick}
+              className="mt-4 px-4 py-1.5 bg-zinc-900 border border-[#1e293b] text-[#f4f4f5] font-mono text-[10px] uppercase hover:bg-zinc-800 rounded-sm cursor-pointer"
+            >
+              Add First Task Blueprint
+            </button>
+          )}
+        </div>
+      ) : viewMode === 'table' ? (
+        /* SPREADSHEET TABLE VIEW (Mainly requested) */
+        <div className="space-y-6">
+          {/* Render individual tables per client group, including virtual groups */}
+          {clientGroupsToRender
+            .map(client => {
+              const clientTasks = activeTab === 'all' 
+                ? (client.id === 'unassigned' 
+                    ? sortedTasks.filter(task => !clients.some(c => c.id === task.clientId)) 
+                    : tasksByClient[client.id] || []) 
+                : sortedTasks;
+              if (activeTab === 'all' && clientTasks.length === 0) return null;
+
+              return (
+                <div key={client.id} className="bg-zinc-950/20 backdrop-blur-xl border-none py-6 space-y-4">
+                  {/* Table Header Section */}
+                  <div className="pb-4 border-b border-zinc-900 flex flex-wrap justify-between items-center gap-4">
+                    <div className="flex items-center gap-2">
+                      <span className={`w-1.5 h-1.5 rounded-full ${client.id === 'unassigned' ? 'bg-red-500 shadow-[0_0_8px_#ef4444]' : 'bg-[#10b981] shadow-[0_0_8px_#10b981]'}`}></span>
+                      <h3 className="text-sm font-serif font-light text-zinc-100 tracking-tight uppercase">
+                        {client.displayName}
+                      </h3>
+                      <span className="text-[9px] font-mono text-zinc-500 bg-zinc-950/40 border border-zinc-900 px-2 py-0.5 rounded-none uppercase tracking-widest">
+                        {client.tier}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <span className="text-[9px] font-mono text-zinc-500 tracking-wider uppercase">
+                        QUANTITY: <strong>{clientTasks.length} ITEMS</strong>
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="text"
+                          placeholder="Quick title add..."
+                          value={quickTitle[client.id] || ''}
+                          onChange={(e) => setQuickTitle({ ...quickTitle, [client.id]: e.target.value })}
+                          onKeyDown={(e) => { if (e.key === 'Enter') handleQuickAdd(client.id); }}
+                          className="bg-transparent border-b border-zinc-800 focus:border-white text-[9px] font-mono focus:outline-none w-32 text-zinc-300 py-0.5 px-1"
+                        />
+                        <button
+                          onClick={() => handleQuickAdd(client.id)}
+                          className="px-2 py-1 bg-zinc-950 border border-zinc-800 text-zinc-400 hover:text-white text-[9px] font-mono rounded-none cursor-pointer transition-colors"
+                        >
+                          + ADD
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Desktop Spreadsheet Scroll Panel */}
+                  <div className="overflow-x-auto select-text">
+                    <table className="w-full text-left border-collapse min-w-[900px]">
+                      <thead>
+                        <tr className="text-[9px] font-mono text-zinc-500 uppercase border-b border-zinc-900 tracking-wider select-none">
+                          <th className="py-2.5 px-3 text-center w-8">
+                            <input
+                              type="checkbox"
+                              checked={clientTasks.length > 0 && clientTasks.every(t => selectedTaskIds.includes(t.id))}
+                              onChange={(e) => handleSelectAllRows(clientTasks.map(t => t.id), e.target.checked)}
+                              className="accent-[#ef4444] cursor-pointer"
+                            />
+                          </th>
+                          {activeColumns.map(col => {
+                            let sortKey = col.id;
+                            if (col.id === 'editor') sortKey = 'assignedEditorId';
+                            return (
+                              <th 
+                                key={col.id} 
+                                onClick={() => handleHeaderSortClick(sortKey)}
+                                className={`py-2.5 px-3 cursor-pointer hover:text-white transition-colors group ${
+                                  col.type === 'money' ? 'text-right' : ''
+                                }`}
+                              >
+                                <div className={`flex items-center gap-1 ${col.type === 'money' ? 'justify-end' : ''}`}>
+                                  {col.label}
+                                  <ArrowUpDown className="w-2.5 h-2.5 opacity-30 group-hover:opacity-100 transition-opacity" />
+                                </div>
+                              </th>
+                            );
+                          })}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-zinc-900 font-mono text-xs">
+                        {clientTasks.map((task, rIdx) => {
+                          const profit = task.clientPay - task.subPay;
+                          const isSelected = selectedTaskIds.includes(task.id);
+
+                          return (
+                            <tr 
+                              key={task.id} 
+                              className={`hover:bg-zinc-950/60 transition-colors ${
+                                isSelected ? 'bg-[#ef4444]/5' : rIdx % 2 === 0 ? 'bg-[#000000]' : 'bg-[#050505]'
+                              }`}
+                            >
+                              {/* Checkbox Select */}
+                              <td className={`${denseLayout ? 'py-1 px-2' : 'py-2.5 px-3'} text-center`}>
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={(e) => handleSelectRow(task.id, e.target.checked)}
+                                  className="accent-[#ef4444] cursor-pointer"
+                                />
+                              </td>
+
+                              {/* Visible Columns Renderer */}
+                              {activeColumns.map(col => {
+                                if (col.id === 'id') {
+                                  return (
+                                    <td key={col.id} className={`${denseLayout ? 'py-1 px-2' : 'py-2.5 px-3'} text-[#71717a] font-bold text-[10px]`}>
+                                      {task.id.replace('task_', 'TX_')}
+                                    </td>
+                                  );
+                                }
+
+                                if (col.id === 'title') {
+                                  return (
+                                    <td key={col.id} className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'}`}>
+                                      <input
+                                        type="text"
+                                        value={task.title}
+                                        onChange={(e) => onUpdateTaskStatus(task.id, task.status, { title: e.target.value })}
+                                        className="bg-transparent border-b border-transparent hover:border-zinc-800 focus:border-[#ef4444] text-[#f4f4f5] font-sans text-xs font-semibold focus:outline-none w-full px-1 py-0.5"
+                                        title="Click to edit name directly"
+                                      />
+                                    </td>
+                                  );
+                                }
+
+                                if (col.id === 'clientPay') {
+                                  return (
+                                    <td key={col.id} className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'} text-right`}>
+                                      <div className="flex items-center justify-end">
+                                        <span className="text-zinc-600 mr-0.5">$</span>
+                                        <input
+                                          type="number"
+                                          value={task.clientPay}
+                                          onChange={(e) => onUpdateTaskStatus(task.id, task.status, { clientPay: Number(e.target.value) })}
+                                          className="bg-transparent border-b border-transparent hover:border-zinc-800 focus:border-[#F97316] text-[#F0E6D8] text-right font-mono text-xs focus:outline-none w-14 px-1"
+                                          title="Click to edit client pay directly"
+                                        />
+                                      </div>
+                                    </td>
+                                  );
+                                }
+
+                                if (col.id === 'subPay') {
+                                  return (
+                                    <td key={col.id} className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'} text-right`}>
+                                      <div className="flex items-center justify-end">
+                                        <span className="text-zinc-600 mr-0.5">$</span>
+                                        <input
+                                          type="number"
+                                          value={task.subPay}
+                                          onChange={(e) => onUpdateTaskStatus(task.id, task.status, { subPay: Number(e.target.value) })}
+                                          className="bg-transparent border-b border-transparent hover:border-zinc-800 focus:border-[#F97316] text-zinc-300 text-right font-mono text-xs focus:outline-none w-14 px-1"
+                                          title="Click to edit sub pay directly"
+                                        />
+                                      </div>
+                                    </td>
+                                  );
+                                }
+
+                                if (col.id === 'netProfit') {
+                                  const marginPercent = task.clientPay > 0 ? ((task.clientPay - task.subPay) / task.clientPay) * 100 : 0;
+                                  const showWarning = lowMarginAlert && marginPercent < 35 && task.clientPay > 0 && profit > 0;
+                                  return (
+                                    <td key={col.id} className={`${denseLayout ? 'py-1 px-2' : 'py-2.5 px-3'} text-right font-black ${profit > 0 ? 'text-emerald-400' : 'text-zinc-500'}`}>
+                                      <div className="flex flex-col items-end">
+                                        <span>{formatPrice(profit)}</span>
+                                        {showWarning && (
+                                          <span className="text-[8px] text-amber-500 font-mono font-bold animate-pulse uppercase tracking-tight">
+                                            ⚠️ LOW MARGIN ({marginPercent.toFixed(0)}%)
+                                          </span>
+                                        )}
+                                      </div>
+                                    </td>
+                                  );
+                                }
+
+                                if (col.id === 'status') {
+                                  const getStatusColor = (st: TaskStatus) => {
+                                    if (st === 'Approved') return 'bg-emerald-500';
+                                    if (st === 'Client Review') return 'bg-amber-500';
+                                    if (st === 'Final Polish') return 'bg-red-500';
+                                    if (st === 'Rough Cut') return 'bg-cyan-400';
+                                    return 'bg-zinc-500';
+                                  };
+                                  return (
+                                    <td key={col.id} className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'}`}>
+                                      <div className="flex items-center gap-1.5 select-none">
+                                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${getStatusColor(task.status)}`} />
+                                        <select
+                                          value={task.status}
+                                          onChange={(e) => onUpdateTaskStatus(task.id, e.target.value as TaskStatus)}
+                                          className="bg-transparent border-none text-zinc-300 text-[10px] font-bold uppercase focus:outline-none cursor-pointer p-0 select-none tracking-wider"
+                                        >
+                                          <option value="Unassigned" className="bg-black text-zinc-400">Unassigned</option>
+                                          <option value="Rough Cut" className="bg-black text-cyan-400">Rough Cut</option>
+                                          <option value="Final Polish" className="bg-black text-red-500">Final Polish</option>
+                                          <option value="Client Review" className="bg-black text-amber-500">Review</option>
+                                          <option value="Approved" className="bg-black text-emerald-400">Approved</option>
+                                        </select>
+                                      </div>
+                                    </td>
+                                  );
+                                }
+
+                                if (col.id === 'editor') {
+                                  return (
+                                    <td key={col.id} className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'}`}>
+                                      <select
+                                        value={task.assignedEditorId}
+                                        onChange={(e) => onUpdateTaskStatus(task.id, task.status, { assignedEditorId: e.target.value })}
+                                        className="bg-transparent border-b border-transparent hover:border-zinc-800 text-zinc-300 text-[10px] font-sans focus:outline-none cursor-pointer max-w-[130px]"
+                                      >
+                                        <option value="Unassigned">Unassigned</option>
+                                        <option value="Phuc">Phuc (Lead)</option>
+                                        {staff.filter(s => s.id !== 'Phuc').map(ed => (
+                                          <option key={ed.id} value={ed.id}>{ed.name}</option>
+                                        ))}
+                                      </select>
+                                    </td>
+                                  );
+                                }
+
+                                if (col.id === 'deadline') {
+                                  return (
+                                    <td key={col.id} className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'}`}>
+                                      <input
+                                        type="text"
+                                        value={task.internalDeadline}
+                                        onChange={(e) => onUpdateTaskStatus(task.id, task.status, { internalDeadline: e.target.value })}
+                                        className={`bg-transparent border-b border-transparent hover:border-zinc-800 focus:border-[#ef4444] text-[10px] font-mono focus:outline-none w-28 ${getDeadlineStyle(task.internalDeadline, task.status)}`}
+                                        title="Format: YYYY-MM-DD HH:MM. Click to edit."
+                                      />
+                                    </td>
+                                  );
+                                }
+
+                                if (col.id === 'rawFootage') {
+                                  return (
+                                    <td key={col.id} className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'}`}>
+                                      <div className="flex items-center gap-1">
+                                        <input
+                                          type="text"
+                                          value={task.rawFootageLink}
+                                          onChange={(e) => onUpdateTaskStatus(task.id, task.status, { rawFootageLink: e.target.value })}
+                                          className="bg-transparent border-b border-transparent hover:border-zinc-800 focus:border-[#ef4444] text-zinc-400 font-mono text-[9px] focus:outline-none w-24 truncate px-0.5"
+                                        />
+                                        {task.rawFootageLink && (
+                                          <a
+                                            href={task.rawFootageLink}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="p-1 hover:bg-zinc-900 rounded-sm text-[#ef4444] shrink-0"
+                                            title="Open link"
+                                          >
+                                            <Link className="w-3 h-3" />
+                                          </a>
+                                        )}
+                                      </div>
+                                    </td>
+                                  );
+                                }
+
+                                if (col.id === 'roughCut') {
+                                  return (
+                                    <td key={col.id} className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'}`}>
+                                      <div className="flex items-center gap-1">
+                                        <input
+                                          type="text"
+                                          placeholder="Empty link..."
+                                          value={task.roughCutUrl || ''}
+                                          onChange={(e) => onUpdateTaskStatus(task.id, task.status, { roughCutUrl: e.target.value })}
+                                          className="bg-transparent border-b border-transparent hover:border-zinc-800 focus:border-[#ef4444] text-[#06b6d4] font-mono text-[9px] focus:outline-none w-24 truncate px-0.5"
+                                        />
+                                        {task.roughCutUrl && (
+                                          <a
+                                            href={task.roughCutUrl}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="p-1 hover:bg-zinc-900 rounded-sm text-cyan-400 shrink-0"
+                                            title="Open Link"
+                                          >
+                                            <Eye className="w-3 h-3" />
+                                          </a>
+                                        )}
+                                      </div>
+                                    </td>
+                                  );
+                                }
+
+                                if (col.id === 'finalUrl') {
+                                  return (
+                                    <td key={col.id} className={`${denseLayout ? 'py-0.5 px-2' : 'py-1 px-3'}`}>
+                                      <div className="flex items-center gap-1">
+                                        <input
+                                          type="text"
+                                          placeholder="Empty final..."
+                                          value={task.finalUrl || ''}
+                                          onChange={(e) => onUpdateTaskStatus(task.id, task.status, { finalUrl: e.target.value })}
+                                          className="bg-transparent border-b border-transparent hover:border-zinc-800 focus:border-white text-emerald-400 font-mono text-[9px] focus:outline-none w-24 truncate px-0.5"
+                                        />
+                                        {task.finalUrl && (
+                                          <a
+                                            href={task.finalUrl}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="p-1 hover:bg-zinc-900 rounded-sm text-emerald-400 shrink-0"
+                                            title="Open Final"
+                                          >
+                                            <CheckCircle2 className="w-3 h-3" />
+                                          </a>
+                                        )}
+                                      </div>
+                                    </td>
+                                  );
+                                }
+
+                                if (col.id === 'actions') {
+                                  return (
+                                    <td key={col.id} className={`${denseLayout ? 'py-1 px-2' : 'py-2.5 px-3'}`}>
+                                      <div className="flex items-center gap-2">
+                                        <button
+                                          onClick={() => onEditTaskClick(task)}
+                                          className="p-1 text-zinc-500 hover:text-white hover:bg-zinc-900 rounded-sm cursor-pointer transition-colors"
+                                          title="Edit Specs Blueprint"
+                                        >
+                                          <Edit className="w-3 h-3" />
+                                        </button>
+                                        <button
+                                          onClick={() => onDeleteTask(task.id)}
+                                          className="p-1 text-zinc-500 hover:text-red-500 hover:bg-zinc-900 rounded-sm cursor-pointer transition-colors"
+                                          title="Delete"
+                                        >
+                                          <Trash2 className="w-3 h-3" />
+                                        </button>
+                                      </div>
+                                    </td>
+                                  );
+                                }
+
+                                return null;
+                              })}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })}
+        </div>
+      ) : (
+        /* CLASSIC DECK VIEW (Styled in Red APEX theme) */
+        <div id="tasks-matrix-grid" className="grid grid-cols-1 lg:grid-cols-2 gap-4 select-text">
+          {sortedTasks.map(task => {
+            const clientName = getClientName(task.clientId);
+            const clientTier = getClientTier(task.clientId);
+            const editorName = getEditorName(task.assignedEditorId);
+            const profit = task.clientPay - task.subPay;
+
+            return (
+              <div 
+                key={task.id}
+                className={`relative bg-[#161210] border-2 rounded-sm p-4 transition-all duration-300 flex flex-col justify-between ${
+                  task.status === 'Approved' 
+                    ? 'border-emerald-500/30' 
+                    : task.status === 'Final Polish'
+                    ? 'border-[#F97316] shadow-[0_0_15px_rgba(249,115,22,0.15)] bg-[#1E1810]'
+                    : 'border-[rgba(249,115,22,0.15)] hover:border-[#F97316]/50'
+                }`}
+              >
+                {/* Status Badge */}
+                <div className="absolute top-3 right-3 flex items-center gap-1.5 px-2 py-0.5 bg-black/80 border border-zinc-800 rounded-sm text-[9px] font-mono tracking-wider uppercase text-[#F0E6D8]">
+                  <span className={`w-1 h-1 rounded-full ${
+                    task.status === 'Approved' ? 'bg-emerald-400' :
+                    task.status === 'Client Review' ? 'bg-amber-400' :
+                    task.status === 'Final Polish' ? 'bg-[#F97316]' : 'bg-[#F97316]'
+                  }`}></span>
+                  {task.status}
+                </div>
+
+                <div>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[8px] font-mono bg-zinc-900 text-[#71717a] border border-zinc-800 px-1 py-0.2 rounded-sm">
+                      ID: {task.id.replace('task_', 'TX_')}
+                    </span>
+                    <span className="text-xs font-mono text-[#F97316] font-bold">
+                      {clientName}
+                    </span>
+                    <span className="text-[8px] font-mono uppercase px-1 py-0.2 bg-zinc-800 text-zinc-400 rounded-sm border border-zinc-900">
+                      {clientTier}
+                    </span>
+                  </div>
+
+                  <h3 className="text-sm font-black tracking-tight text-white mt-2 font-sans leading-tight">
+                    {task.title}
+                  </h3>
+
+                  {task.notes && (
+                    <div className="mt-2.5 p-2 bg-black/60 border border-zinc-900 rounded-sm text-[11px] font-sans text-zinc-500">
+                      <span className="text-[8px] font-mono text-[#F97316] uppercase block mb-0.5">// GUIDELINES:</span>
+                      {task.notes}
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-zinc-900">
+                    <div>
+                      <span className="text-[8px] font-mono uppercase text-[#71717a] block">
+                        Operator
+                      </span>
+                      <div className="flex items-center gap-1 mt-0.5 text-xs font-mono font-bold text-white">
+                        <User className="w-3 h-3 text-zinc-500" />
+                        <span>{editorName}</span>
+                      </div>
+                    </div>
+
+                    <div>
+                      <span className="text-[8px] font-mono uppercase text-[#71717a] block">
+                        Target Deadline
+                      </span>
+                      <div className="inline-flex items-center gap-1 mt-0.5 text-[10px] font-mono text-zinc-300">
+                        <Calendar className="w-3 h-3 text-[#F97316]" />
+                        <span className={getDeadlineStyle(task.internalDeadline, task.status)}>{task.internalDeadline}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Resource Link box */}
+                  <div className="mt-3 flex items-center gap-2 justify-between bg-[#0C0A08] px-2.5 py-1.5 rounded-sm border border-[rgba(249,115,22,0.1)]">
+                    <div className="flex items-center gap-1.5 overflow-hidden">
+                      <Link className="w-3 h-3 text-[#F97316] shrink-0" />
+                      <span className="text-[9px] font-mono text-zinc-500 truncate">
+                        {task.rawFootageLink}
+                      </span>
+                    </div>
+                    <div className="flex gap-1">
+                      <a 
+                        href={task.rawFootageLink}
+                        target="_blank" 
+                        rel="noreferrer"
+                        className="px-1.5 py-0.5 bg-zinc-900 hover:bg-zinc-800 text-[9px] font-mono text-white rounded-sm border border-zinc-800 uppercase"
+                      >
+                        Open
+                      </a>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Card footer details */}
+                <div className="mt-4 pt-3 border-t border-zinc-900 space-y-2">
+                  <div className="flex justify-between items-center text-[9px] font-mono text-zinc-500 bg-black/40 px-2.5 py-1 rounded-sm border border-zinc-900">
+                    <span>Client Pay: <strong className="text-zinc-300">{formatPrice(task.clientPay)}</strong></span>
+                    <span>Sub Pay: <strong className="text-zinc-300">{formatPrice(task.subPay)}</strong></span>
+                    <span>Profit: <strong className="text-[#F97316] font-bold">{formatPrice(profit)}</strong></span>
+                  </div>
+
+                  <div className="flex justify-end gap-3 pt-1 text-[10px]">
+                    <button
+                      onClick={() => onEditTaskClick(task)}
+                      className="text-[#B8967D] hover:text-[#F97316] font-mono flex items-center gap-0.5 cursor-pointer"
+                    >
+                      <Edit className="w-3 h-3" /> Edit Specs
+                    </button>
+                    <button
+                      onClick={() => onDeleteTask(task.id)}
+                      className="text-zinc-500 hover:text-red-500 font-mono flex items-center gap-0.5 cursor-pointer"
+                    >
+                      <Trash2 className="w-3 h-3" /> Delete
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
